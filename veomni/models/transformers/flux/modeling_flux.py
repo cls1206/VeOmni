@@ -16,6 +16,7 @@
 import torch
 import torch.nn.functional as F
 from einops import rearrange
+from transformers.modeling_outputs import ModelOutput
 from transformers.modeling_utils import PreTrainedModel
 
 from veomni.distributed.parallel_state import get_parallel_state
@@ -205,7 +206,6 @@ class FluxJointAttention(torch.nn.Module):
             self.b_to_out = torch.nn.Linear(dim_b, dim_b)
 
     def apply_rope(self, xq, xk, freqs_cis):
-        # 打印输入大小，在一行
 
         xq_ = xq.float().reshape(*xq.shape[:-1], -1, 1, 2)
         xk_ = xk.float().reshape(*xk.shape[:-1], -1, 1, 2)
@@ -428,6 +428,11 @@ class AdaLayerNormContinuous(torch.nn.Module):
         return x
 
 
+class FluxModelOutput(ModelOutput):
+    loss: dict[str, torch.FloatTensor] | None = None
+    predictions: list[torch.FloatTensor] | None = None
+
+
 class FluxModel(PreTrainedModel):
     config_class = FluxConfig
     supports_gradient_checkpointing = True
@@ -464,7 +469,7 @@ class FluxModel(PreTrainedModel):
 
         H = height // 2
         W = width // 2
-        C = hidden_states.shape[-1] // (2 * 2)  # 计算推断的通道数
+        C = hidden_states.shape[-1] // (2 * 2)
 
         output = rearrange(hidden_states, "B (H W) (C P Q) -> B C (H P) (W Q)", P=2, Q=2, H=H, W=W, C=C)
         return output
@@ -570,7 +575,7 @@ class FluxModel(PreTrainedModel):
         guidance = torch.Tensor([guidance] * latents.shape[0]).to(device=latents.device, dtype=latents.dtype)
         return {"image_ids": latent_image_ids, "guidance": guidance}
 
-    def forward(
+    def _forward_single(
         self,
         hidden_states,
         timestep,
@@ -579,26 +584,9 @@ class FluxModel(PreTrainedModel):
         guidance,
         text_ids,
         image_ids=None,
-        tiled=False,
-        tile_size=128,
-        tile_stride=64,
         entity_prompt_emb=None,
         entity_masks=None,
-        **kwargs,
     ):
-        if tiled:
-            return self.tiled_forward(
-                hidden_states,
-                timestep,
-                prompt_emb,
-                pooled_prompt_emb,
-                guidance,
-                text_ids,
-                tile_size=tile_size,
-                tile_stride=tile_stride,
-                **kwargs,
-            )
-
         if image_ids is None:
             image_ids = self.prepare_image_ids(hidden_states)
 
@@ -623,16 +611,9 @@ class FluxModel(PreTrainedModel):
             image_rotary_emb = self.pos_embedder(torch.cat((text_ids, image_ids), dim=1))
             attention_mask = None
 
-        def create_custom_forward(module):
-            def custom_forward(*inputs):
-                return module(*inputs)
-
-            return custom_forward
-
         if get_parallel_state().ulysses_enabled:
             hidden_states = slice_input_tensor(hidden_states, dim=1)
             prompt_emb = slice_input_tensor(prompt_emb, dim=1)
-            # image_rotary_emb = slice_input_tensor(image_rotary_emb, dim=2)
 
         for block in self.blocks:
             if self.training and self.gradient_checkpointing:
@@ -681,6 +662,74 @@ class FluxModel(PreTrainedModel):
         hidden_states = self.final_proj_out(hidden_states)
         hidden_states = self.unpatchify(hidden_states, height, width)
         return hidden_states
+
+    def forward(
+        self,
+        hidden_states,
+        timestep,
+        encoder_hidden_states=None,
+        prompt_emb=None,
+        pooled_prompt_emb=None,
+        guidance=None,
+        text_ids=None,
+        training_target=None,
+        latents=None,
+        image_ids=None,
+        tiled=False,
+        tile_size=128,
+        tile_stride=64,
+        entity_prompt_emb=None,
+        entity_masks=None,
+        **kwargs,
+    ):
+        if encoder_hidden_states is not None and prompt_emb is None:
+            prompt_emb = encoder_hidden_states
+
+        if training_target is not None:
+            per_sample_losses = []
+            predictions = []
+            for hs, ts, pe, ppe, g, ti, target in zip(
+                hidden_states, timestep, prompt_emb, pooled_prompt_emb, guidance, text_ids, training_target
+            ):
+                prediction = self._forward_single(
+                    hidden_states=hs,
+                    timestep=ts,
+                    prompt_emb=pe,
+                    pooled_prompt_emb=ppe,
+                    guidance=g,
+                    text_ids=ti,
+                )
+                predictions.append(prediction)
+                per_sample_loss = F.mse_loss(prediction.float(), target.float(), reduction="none")
+                per_sample_loss = per_sample_loss.view(per_sample_loss.shape[0], -1).mean(dim=1)
+                per_sample_losses.append(per_sample_loss)
+            loss = torch.stack(per_sample_losses).mean()
+            return FluxModelOutput(loss={"mse_loss": loss}, predictions=predictions)
+
+        if tiled:
+            return self.tiled_forward(
+                hidden_states,
+                timestep,
+                prompt_emb,
+                pooled_prompt_emb,
+                guidance,
+                text_ids,
+                tile_size=tile_size,
+                tile_stride=tile_stride,
+                **kwargs,
+            )
+
+        return self._forward_single(
+            hidden_states=hidden_states,
+            timestep=timestep,
+            prompt_emb=prompt_emb,
+            pooled_prompt_emb=pooled_prompt_emb,
+            guidance=guidance,
+            text_ids=text_ids,
+            image_ids=image_ids,
+            entity_prompt_emb=entity_prompt_emb,
+            entity_masks=entity_masks,
+        )
 
     def quantize(self):
         def cast_to(weight, dtype=None, device=None, copy=False):

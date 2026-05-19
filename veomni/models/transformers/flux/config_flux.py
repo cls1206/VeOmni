@@ -18,6 +18,7 @@ from transformers import PretrainedConfig
 
 class FluxConfig(PretrainedConfig):
     model_type = "flux"
+    condition_model_type = "FluxConditionModel"
 
     def __init__(self, disable_guidance_embedder=False, input_dim=64, num_blocks=19, **kwargs):
         self.disable_guidance_embedder = disable_guidance_embedder

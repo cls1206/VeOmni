@@ -1,0 +1,59 @@
+model:
+  model_path: FLUX.1-dev/flux1-dev.safetensors
+  condition_model_path: FLUX.1-dev
+  config_path: ./configs/model_configs/flux/flux.json
+  ops_implementation:
+    attn_implementation: flash_attention_3
+  lora_config:
+    rank: 16
+    alpha: 16
+    lora_modules:
+      - a_to_qkv
+      - b_to_qkv
+      - ff_a.0
+      - ff_a.2
+      - ff_b.0
+      - ff_b.2
+      - a_to_out
+      - b_to_out
+      - proj_out
+      - norm.linear
+      - norm1_a.linear
+      - norm1_b.linear
+      - to_qkv_mlp
+
+data:
+  train_path: Watercolor-parquet
+  source_name: X2I-text-to-image
+  mm_configs:
+    height: 1024
+    width: 768
+
+train:
+  global_batch_size: 8
+  micro_batch_size: 1
+  bsz_warmup_ratio: 0.007
+  dyn_bsz: false
+  init_device: meta
+  num_train_epochs: 20
+  training_task: online_training
+  accelerator:
+    ulysses_size: 1
+    fsdp_config:
+      fsdp_mode: fsdp2
+  checkpoint:
+    output_dir: Flux_lora
+    save_hf_weights: true
+    hf_save_epochs: 5
+  optimizer:
+    type: adamw
+    lr: 1.0e-4
+    lr_warmup_ratio: 0.007
+    lr_decay_style: constant
+    lr_decay_ratio: 1.0
+    weight_decay: 0.01
+    max_grad_norm: 1.0
+  wandb:
+    enable: true
+    project: veomni_dit
+    name: Flux_lora
