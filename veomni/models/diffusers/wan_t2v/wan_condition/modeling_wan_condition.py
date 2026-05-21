@@ -65,10 +65,17 @@ class WanTransformer3DConditionModel(PreTrainedModel):
                 subfolder=self.config.vae_subfolder,
                 torch_dtype=torch.float32,
             )
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            base,
-            subfolder=self.config.scheduler_subfolder,
-        )
+        try:
+            self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+                base,
+                subfolder=self.config.scheduler_subfolder,
+            )
+        except Exception:
+            logger.info_rank0(
+                "FlowMatchEulerDiscreteScheduler.from_pretrained failed (checkpoint may use a different "
+                "scheduler class such as UniPCMultistepScheduler). Falling back to default config."
+            )
+            self.scheduler = FlowMatchEulerDiscreteScheduler()
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae.config.scale_factor_spatial)
         self._prepare_negative_prompt_embeds()
         if self.meta_init:
