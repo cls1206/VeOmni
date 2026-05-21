@@ -1,37 +1,36 @@
 model:
-  model_path: FLUX.1-dev/flux1-dev.safetensors
-  pretrained_text_encoder_path: FLUX.1-dev/text_encoder/model.safetensors
-  pretrained_text_encoder_2_path: FLUX.1-dev/text_encoder_2
-  pretrained_vae_path: FLUX.1-dev/ae.safetensors
-  config_path: ./configs/model_configs/flux/flux.json
+  model_path: FLUX.1-dev/transformer
+  condition_model_path: FLUX.1-dev
+  config_path: ./configs/model_configs/flux/flux_transformer.json
+  condition_model_cfg:
+    max_sequence_length: 512
+    height: 1024
+    width: 768
+    guidance_scale: 3.5
   ops_implementation:
-    attn_implementation: flash_attention_2
-  tokenizer_1_path: FLUX.1-dev/tokenizer
-  tokenizer_2_path: FLUX.1-dev/tokenizer_2
-
+    attn_implementation: eager
 
 data:
-  train_path: X2I-text-to-image
+  train_path: flux_image_train
   train_size: 1000000000000
   dataloader:
     type: native
     drop_last: true
   datasets_type: iterable
   data_type: diffusion
-  max_seq_len: 8192
+  max_seq_len: 4096
   text_keys: text
-  height: 1024
-  width: 768
-  datasets_repeat: 10
   dyn_bsz_buffer_size: 200
+  source_name: Flux
 
 train:
   accelerator:
+    dp_replicate_size: 1
     ulysses_size: 1
     fsdp_config:
       fsdp_mode: fsdp2
       mixed_precision:
-        enable: true
+        enable: false
     offload:
       enable_activation: false
   gradient_checkpointing:
@@ -41,7 +40,7 @@ train:
   bsz_warmup_ratio: 0.007
   optimizer:
     type: adamw
-    lr: 1.0e-4
+    lr: 1.0e-5
     lr_warmup_ratio: 0.007
     lr_decay_style: constant
     lr_decay_ratio: 1.0
@@ -51,18 +50,13 @@ train:
   enable_full_determinism: false
   empty_cache_steps: 500
   checkpoint:
-    output_dir: Flux_SFT
+    output_dir: flux-sft
     manager: dcp
-    save_steps: 100
+    save_epochs: 1
     save_hf_weights: true
   max_steps: 500
-  num_train_epochs: 100
+  num_train_epochs: 3
   wandb:
     enable: false
     project: Flux
-    name: Flux
-  ops_to_save:
-    - aten.addmm.default
-    - torch.ops.flash_attn._flash_attn_forward.default
-    - aten._scaled_dot_product_flash_attention.default
-    - torch.ops.flash_attn_3.fwd.default
+    name: sft_flux

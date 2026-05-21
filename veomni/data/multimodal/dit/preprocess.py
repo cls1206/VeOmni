@@ -26,3 +26,20 @@ def qwen_image_preprocess(conversations, **kwargs):
     if image is None:
         raise ValueError("Qwen-Image data requires one of: image, image_bytes, image_path, target_image.")
     return prompt, {}, [image], []
+
+
+@PREPROCESSOR_REGISTRY.register("Flux")
+@PREPROCESSOR_REGISTRY.register("X2I-text-to-image")
+def flux_image_preprocess(conversations, **kwargs):
+    prompt = conversations.get("prompt") or conversations.get("text") or conversations.get("caption")
+    image = (
+        conversations.get("image")
+        or conversations.get("image_bytes")
+        or conversations.get("image_path")
+        or conversations.get("target_image")
+    )
+    if prompt is None:
+        raise ValueError("Flux data requires one of: prompt, text, caption.")
+    if image is None:
+        raise ValueError("Flux data requires one of: image, image_bytes, image_path, target_image.")
+    return prompt, {}, [image], []
